@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{col}/{id} {
+      allow read: if col in ['docs', 'terms', 'meta'];
+      allow write: if false;
+    }
+  }
+}
