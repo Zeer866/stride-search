@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stride Search</title>
+<meta name="description" content="Buscador abierto y sin rastreo.">
+<meta name="theme-color" content="#EAF4FF">
+<link rel="icon" href="icon-512.png">
+<style>
+:root{--ac:#0A6CFF;--bg:#EAF4FF;--card:#fff;--ink:#0B1F44;--mut:#5B7099;--line:#D3E4FB;--ok:#12A36B;font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+@media(prefers-color-scheme:dark){:root{--bg:#081428;--card:#10213F;--ink:#E8F1FF;--mut:#8FA6CC;--line:#1D3560}}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0 16px}
+#top{width:min(720px,100%);display:flex;flex-direction:column;align-items:center;margin-top:16vh;transition:margin .2s}
+body.res #top{margin-top:20px;flex-direction:row;gap:14px}
+#brand{display:flex;flex-direction:column;align-items:center;gap:6px;text-decoration:none;color:inherit}
+#brand img{width:88px;height:88px;filter:drop-shadow(0 10px 22px rgba(10,108,255,.35))}
+#brand h1{font-size:38px;font-weight:800;letter-spacing:-.03em}
+body.res #brand img{width:40px;height:40px}
+body.res #brand h1,body.res #tag{display:none}
+#tag{color:var(--mut);margin:2px 0 22px;text-align:center}
+body.res #tag{margin:0}
+form{display:flex;align-items:center;gap:8px;width:100%;height:54px;padding:0 8px 0 20px;background:var(--card);border-radius:999px;box-shadow:0 8px 28px rgba(10,108,255,.16)}
+body.res form{height:46px}
+input{flex:1;min-width:0;border:0;outline:0;background:none;font:inherit;font-size:16px;color:var(--ink)}
+button{font:inherit;border:0;cursor:pointer}
+form button{height:38px;padding:0 18px;border-radius:999px;background:var(--ac);color:#fff;font-weight:600}
+#status{width:min(720px,100%);color:var(--mut);font-size:14px;margin:16px 4px 4px;min-height:20px;text-align:center}
+body.res #status{text-align:left}
+#list{width:min(720px,100%);display:flex;flex-direction:column;gap:6px}
+.r{padding:14px 16px;border-radius:16px;background:var(--card)}
+.r a.t{font-size:18px;font-weight:600;color:var(--ac);text-decoration:none;overflow-wrap:anywhere}
+.r a.t:hover{text-decoration:underline}
+.r .u{font-size:13px;color:var(--ok);margin:2px 0 6px;overflow-wrap:anywhere}
+.r p{font-size:14px;line-height:1.5;color:var(--mut)}
+#more{margin:16px 0;padding:11px 22px;border-radius:12px;background:var(--card);color:var(--ink);font-weight:600}
+footer{margin:auto 0 18px;padding-top:30px;color:var(--mut);font-size:12px;text-align:center}
+footer a{color:inherit}
+</style>
+</head>
+<body>
+<div id="top">
+  <a id="brand" href="./"><img src="icon-512.png" alt="Stride"><h1>Stride Search</h1></a>
+  <p id="tag">Buscador abierto. Sin rastreo.</p>
+  <form id="f" role="search"><input id="q" type="search" placeholder="Buscar" autocomplete="off" aria-label="Buscar" autofocus><button>Buscar</button></form>
+</div>
+<div id="status" role="status"></div>
+<div id="list"></div>
+<button id="more" hidden>Más resultados</button>
+<footer>Stride Search · código abierto (MIT) · <span id="stats"></span></footer>
+<script type="module">
+import cfg from './firebase-config.js';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import { getFirestore, doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+
+const STOP = new Set(('a al algo ante con como de del el en es esta este la las lo los me mi muy no o para pero por que se si sin su sus un una y ' +
+  'the and or of to in is it for on with as at by an be this that from are was were').split(' '));
+const tokenize = text => String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .split(/[^a-z0-9]+/).filter(w => w.length >= 2 && w.length <= 40 && !STOP.has(w));
+
+const $ = s => document.querySelector(s);
+const status = m => { $('#status').textContent = m; };
+let db, ranked = [], shown = 0;
+
+if (cfg.projectId === 'PEGA_AQUI') {
+  status('Falta pegar la configuración de Firebase en firebase-config.js');
+} else {
+  db = getFirestore(initializeApp(cfg));
+  getDoc(doc(db, 'meta', 'stats')).then(s => {
+    if (s.exists()) {
+      const d = s.data();
+      $('#stats').textContent = d.docs + ' páginas indexadas · ' + new Date(d.updated).toLocaleDateString('es');
+    }
+  }).catch(() => {});
+}
+
+async function run(q) {
+  q = q.trim();
+  history.replaceState(null, '', q ? '?q=' + encodeURIComponent(q) : location.pathname);
+  document.body.classList.toggle('res', !!q);
+  $('#list').textContent = '';
+  $('#more').hidden = true;
+  document.title = q ? q + ' – Stride Search' : 'Stride Search';
+  if (!q || !db) return;
+  const terms = [...new Set(tokenize(q))].slice(0, 8);
+  if (!terms.length) { status('Escribe palabras un poco más largas.'); return; }
+  status('Buscando…');
+  try {
+    const snaps = await Promise.all(terms.map(t => getDoc(doc(db, 'terms', t))));
+    const sc = new Map(), hit = new Map();
+    for (const s of snaps) {
+      if (!s.exists()) continue;
+      for (const e of s.data().p) {
+        const [id, v] = e.split(':');
+        sc.set(id, (sc.get(id) || 0) + Number(v));
+        hit.set(id, (hit.get(id) || 0) + 1);
+      }
+    }
+    ranked = [...sc.keys()].sort((a, b) => hit.get(b) - hit.get(a) || sc.get(b) - sc.get(a));
+    shown = 0;
+    if (!ranked.length) { status('Sin resultados para «' + q + '». Mi índice es pequeño: prueba otras palabras.'); return; }
+    status(ranked.length + ' resultados');
+    await more();
+  } catch (e) {
+    status('No se pudo buscar. Revisa la configuración de Firebase y las reglas.');
+  }
+}
+
+async function more() {
+  const ids = ranked.slice(shown, shown + 10);
+  shown += ids.length;
+  const docs = await Promise.all(ids.map(id => getDoc(doc(db, 'docs', id))));
+  for (const d of docs) {
+    if (!d.exists()) continue;
+    const r = d.data();
+    if (!/^https?:\/\//.test(r.url)) continue;
+    const box = document.createElement('div'); box.className = 'r';
+    const a = document.createElement('a'); a.className = 't'; a.href = r.url; a.rel = 'noopener noreferrer';
+    a.textContent = r.title;
+    const u = document.createElement('div'); u.className = 'u'; u.textContent = r.url;
+    const p = document.createElement('p'); p.textContent = r.desc;
+    box.append(a, u, p);
+    $('#list').append(box);
+  }
+  $('#more').hidden = shown >= ranked.length;
+}
+
+$('#f').addEventListener('submit', e => { e.preventDefault(); run($('#q').value); $('#q').blur(); });
+$('#more').addEventListener('click', more);
+const q0 = new URLSearchParams(location.search).get('q');
+if (q0) { $('#q').value = q0; run(q0); }
+</script>
+</body>
+  </html>
