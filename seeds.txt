@@ -1,0 +1,3 @@
+# Una dirección por línea. Stride Search solo rastrea esos sitios.
+https://es.wikipedia.org/wiki/Portada
+https://developer.mozilla.org/es/
